@@ -355,7 +355,14 @@ const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 const ADMIN_PIN = "1234";
 
 const HOURS = ["5:00–6:00 PM", "6:00–7:00 PM"];
-const MAX_PLAYERS = 6;
+const COURT_CAPACITY = 4; // total people per court, booker counts as one
+
+function maxPlayers(court) {
+  return COURT_CAPACITY - (court.booker ? 1 : 0);
+}
+function spotsLeft(court) {
+  return Math.max(0, maxPlayers(court) - court.players.length);
+}
 let state = null;
 let modalCallback = null;
 let pendingAdminAction = null;
@@ -465,7 +472,7 @@ async function createScramble() {
   const courts = [];
   HOURS.forEach(hour => {
     for (let i = 1; i <= numCourts; i++) {
-      courts.push({ hour, label: `Court ${i}`, booker: "", link: "", players: [] });
+      courts.push({ hour, label: `Court ${i}`, booker: "", link: "", players: [], waitlist: [] });
     }
   });
 
@@ -530,14 +537,20 @@ function renderCourts() {
     }
   });
 
-  document.getElementById("add-court-btn").style.display = courtsPerHour < 4 ? "block" : "none";
+  const anyFullWaitlist = state.courts.some(c => (c.waitlist || []).length >= 4);
+  document.getElementById("add-court-btn").style.display =
+    (courtsPerHour < 4 && anyFullWaitlist) ? "block" : "none";
 }
 
 function buildCourtCard(court, idx) {
-  const spots = MAX_PLAYERS - court.players.length;
-  const full = spots === 0;
-  const badgeClass = full ? "badge-full" : spots <= 2 ? "badge-warn" : "badge-open";
-  const badgeText  = full ? "FULL" : `${spots} spot${spots !== 1 ? "s" : ""} left`;
+  const spots = spotsLeft(court);
+  const full   = spots === 0;
+  const waitlist = court.waitlist || [];
+  const badgeClass = full ? "badge-full" : spots === 1 ? "badge-warn" : "badge-open";
+  const badgeText  = full
+    ? (waitlist.length ? `FULL · ${waitlist.length} waiting` : "FULL")
+    : `${spots} spot${spots !== 1 ? "s" : ""} open`;
+
   const card = document.createElement("div");
   card.className = "court-card";
   card.innerHTML = `
@@ -568,7 +581,7 @@ function buildCourtCard(court, idx) {
         : `<button class="ghost-btn" onclick="openFieldModal(${idx},'link','Paste reservation link','https://...')">+ Paste link</button>`}
     </div>
     <div class="divider"></div>
-    <div class="players-grid" id="players-${idx}">
+    <div class="players-grid">
       ${court.players.map((p, pi) => `
         <div class="player-chip">
           <span class="player-name">${esc(p)}</span>
@@ -576,6 +589,18 @@ function buildCourtCard(court, idx) {
         </div>`).join("")}
       ${!full ? `<button class="join-btn" onclick="openJoinModal(${idx})">+ Join</button>` : ""}
     </div>
+    ${full ? `
+    <div class="divider" style="margin-top:10px"></div>
+    <div style="font-size:11px; font-weight:bold; color:var(--text-dim); letter-spacing:1.2px; text-transform:uppercase; margin:8px 0 6px">Waitlist</div>
+    <div class="players-grid">
+      ${waitlist.map((p, wi) => `
+        <div class="player-chip" style="border-color:rgba(255,152,0,0.3); background:rgba(255,152,0,0.08)">
+          <span class="player-name" style="color:var(--orange)">${esc(p)}</span>
+          <button class="chip-x" onclick="removeWaitlister(${idx},${wi})">✕</button>
+        </div>`).join("")}
+      <button class="join-btn" style="border-color:rgba(255,152,0,0.4); color:var(--orange)"
+        onclick="openWaitlistModal(${idx})">+ Waitlist</button>
+    </div>` : ""}
   `;
   return card;
 }
@@ -597,7 +622,7 @@ async function addCourt() {
   const newCourts = [...state.courts];
   HOURS.forEach(hour => {
     const existing = newCourts.filter(c => c.hour === hour).length;
-    newCourts.push({ hour, label: `Court ${existing + 1}`, booker: "", link: "", players: [] });
+    newCourts.push({ hour, label: `Court ${existing + 1}`, booker: "", link: "", players: [], waitlist: [] });
   });
   state.courts = newCourts;
   await saveState();
@@ -607,13 +632,56 @@ async function addCourt() {
 }
 
 function deleteCourtPrompt(label) {
-  requireAdmin(() => deleteCourt(label));
+  requireAdmin(() => confirmDeleteCourt(label));
+}
+function confirmDeleteCourt(label) {
+  document.getElementById("modal-title").textContent = `Remove ${label}?`;
+  document.getElementById("modal-sub").textContent = "This removes it from both hour blocks.";
+  document.getElementById("modal-input").style.display = "none";
+  document.getElementById("modal-btns").className = "modal-row";
+  document.getElementById("modal-btns").innerHTML = `
+    <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+    <button class="danger-btn" onclick="deleteCourt('${label}')">Remove Court</button>
+  `;
+  openModal();
 }
 async function deleteCourt(label) {
   state.courts = state.courts.filter(c => c.label !== label);
   await saveState();
+  closeModal();
   renderCourts();
   showToast(`${label} removed from both blocks`);
+}
+
+function removeWaitlister(idx, wi) {
+  (state.courts[idx].waitlist = state.courts[idx].waitlist || []).splice(wi, 1);
+  saveState(); renderCourts();
+}
+
+function openWaitlistModal(idx) {
+  const court = state.courts[idx];
+  const waitlist = court.waitlist || [];
+  document.getElementById("modal-title").textContent = "Join Waitlist";
+  document.getElementById("modal-sub").textContent =
+    `${court.hour} · ${court.label} is full · ${waitlist.length} already waiting`;
+  const input = document.getElementById("modal-input");
+  input.style.display = "block";
+  input.placeholder = "Your name";
+  input.value = "";
+  input.dispatchEvent(new Event("input"));
+  document.getElementById("modal-btns").className = "modal-row";
+  document.getElementById("modal-btns").innerHTML = `
+    <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+    <button class="save-btn" id="modal-save" onclick="modalSave()" disabled>Join Waitlist</button>
+  `;
+  input.oninput = () => document.getElementById("modal-save").disabled = !input.value.trim();
+  modalCallback = (val) => {
+    if (!state.courts[idx].waitlist) state.courts[idx].waitlist = [];
+    state.courts[idx].waitlist.push(val);
+    saveState(); renderCourts();
+  };
+  openModal();
+  setTimeout(() => input.focus(), 300);
 }
 
 // ── ADMIN AUTH ────────────────────────────────────────────
@@ -745,9 +813,10 @@ function openFieldModal(idx, field, title, placeholder) {
 
 function openJoinModal(idx) {
   const court = state.courts[idx];
-  const spots = MAX_PLAYERS - court.players.length;
+  const spots = spotsLeft(court);
   document.getElementById("modal-title").textContent = "Add your name";
-  document.getElementById("modal-sub").textContent = `${court.hour} · ${court.label} · ${spots} spot${spots !== 1 ? "s" : ""} left`;
+  document.getElementById("modal-sub").textContent =
+    `${court.hour} · ${court.label} · ${spots} spot${spots !== 1 ? "s" : ""} open`;
   const input = document.getElementById("modal-input");
   input.style.display = "block";
   input.placeholder = "Your name";
@@ -760,7 +829,7 @@ function openJoinModal(idx) {
   `;
   input.oninput = () => document.getElementById("modal-save").disabled = !input.value.trim();
   modalCallback = (val) => {
-    if (state.courts[idx].players.length >= MAX_PLAYERS) return;
+    if (spotsLeft(state.courts[idx]) <= 0) return;
     state.courts[idx].players.push(val);
     saveState(); renderCourts();
   };
@@ -789,10 +858,11 @@ function copyWhatsApp() {
   HOURS.forEach(hour => {
     txt += `⏰ ${hour}\n`;
     state.courts.filter(c => c.hour === hour).forEach(c => {
-      const spots = MAX_PLAYERS - c.players.length;
-      txt += `  ${c.label}${c.booker ? ` (${c.booker})` : ""} — ${spots} spot${spots !== 1 ? "s" : ""} left\n`;
+      const spots = spotsLeft(c);
+      txt += `  ${c.label}${c.booker ? ` (${c.booker})` : ""} — ${spots} spot${spots !== 1 ? "s" : ""} open\n`;
       if (c.link)    txt += `  🔗 ${c.link}\n`;
       if (c.players.length) txt += `  👥 ${c.players.join(", ")}\n`;
+      if ((c.waitlist || []).length) txt += `  ⏳ Waitlist: ${c.waitlist.join(", ")}\n`;
     });
     txt += "\n";
   });
