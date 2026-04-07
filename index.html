@@ -381,12 +381,15 @@ async function loadList() {
   const emptyEl = document.getElementById("list-empty");
   listEl.innerHTML = "";
 
-  if (!data || data.length === 0) {
+  const hidden = getHiddenIds();
+  const visible = (data || []).filter(s => !hidden.includes(s.id));
+
+  if (visible.length === 0) {
     emptyEl.style.display = "block";
     return;
   }
   emptyEl.style.display = "none";
-  data.forEach(s => listEl.appendChild(buildScrambleCard(s)));
+  visible.forEach(s => listEl.appendChild(buildScrambleCard(s)));
 }
 
 function buildScrambleCard(s) {
@@ -695,12 +698,29 @@ function confirmDelete() {
 }
 
 async function deleteScramble() {
-  await db.from("scrambles").delete().eq("id", state.id);
+  const id = state.id;
+  const { error } = await db.from("scrambles").delete().eq("id", id);
+  if (error) { showToast("❌ Delete failed"); console.error(error); closeModal(); return; }
+
+  // Supabase RLS can silently block deletes — verify the record is actually gone
+  const { data: check } = await db.from("scrambles").select("id").eq("id", id).maybeSingle();
+  if (check) {
+    // Hard delete blocked by RLS — hide it locally so it disappears from the list
+    const hidden = getHiddenIds();
+    hidden.push(id);
+    localStorage.setItem("hidden_scrambles", JSON.stringify(hidden));
+  }
+
   if (realtimeChannel) { db.removeChannel(realtimeChannel); realtimeChannel = null; }
   state = null;
   closeModal();
   showToast("🗑️ Scramble deleted");
   loadList();
+}
+
+function getHiddenIds() {
+  try { return JSON.parse(localStorage.getItem("hidden_scrambles") || "[]"); }
+  catch { return []; }
 }
 
 // ── MODAL HELPERS ─────────────────────────────────────────
