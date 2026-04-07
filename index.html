@@ -540,7 +540,11 @@ function buildCourtCard(court, idx) {
   card.innerHTML = `
     <div class="card-head">
       <span class="court-label">${court.label}</span>
-      <span class="badge ${badgeClass}">${badgeText}</span>
+      <div style="display:flex; align-items:center; gap:8px">
+        <span class="badge ${badgeClass}">${badgeText}</span>
+        <button class="x-btn" style="font-size:15px; color:var(--text-dim)" title="Remove court"
+          onclick="deleteCourtPrompt('${court.label}')">🗑</button>
+      </div>
     </div>
     <div class="info-row">
       <span class="info-icon">👤</span>
@@ -597,6 +601,16 @@ async function addCourt() {
   renderCourts();
   const count = state.courts.filter(c => c.hour === HOURS[0]).length;
   showToast(`Court ${count} added to both blocks!`);
+}
+
+function deleteCourtPrompt(label) {
+  requireAdmin(() => deleteCourt(label));
+}
+async function deleteCourt(label) {
+  state.courts = state.courts.filter(c => c.label !== label);
+  await saveState();
+  renderCourts();
+  showToast(`${label} removed from both blocks`);
 }
 
 // ── ADMIN AUTH ────────────────────────────────────────────
