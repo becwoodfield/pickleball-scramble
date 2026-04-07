@@ -6,26 +6,6 @@
   <title>🏓 Pickleball Scramble</title>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
-    /* NEW: scramble list cards */
-    .scramble-card {
-      margin: 0 0 10px;
-      background: var(--bg3);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 16px;
-      cursor: pointer;
-      transition: border-color 0.15s;
-    }
-    .scramble-card:active { border-color: var(--green); }
-    .scramble-card-date { font-size: 17px; font-weight: bold; color: var(--green-pale); }
-    .scramble-card-meta { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
-    .status-open  { background: rgba(102,187,106,0.15); color: #66bb6a; border: 1px solid rgba(102,187,106,0.3); }
-    .status-closed{ background: rgba(255,255,255,0.05); color: var(--text-dim); border: 1px solid rgba(255,255,255,0.1); }
-    .empty-state { text-align:center; padding: 80px 20px; color: var(--text-dim); font-size:15px; line-height:1.7; }
-
-    /* NEW: vertical modal stack for admin options */
-    .modal-col { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
-  </style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 
     :root {
@@ -250,6 +230,24 @@
       background: var(--green); border-radius: 50%; margin-right: 5px;
       animation: pulse 1.5s ease-in-out infinite;
     }
+
+    /* ── SCRAMBLE LIST ── */
+    .scramble-card {
+      margin: 0 0 10px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .scramble-card:active { border-color: var(--green); }
+    .scramble-card-date { font-size: 17px; font-weight: bold; color: var(--green-pale); }
+    .scramble-card-meta { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+    .status-open   { background: rgba(102,187,106,0.15); color: #66bb6a; border: 1px solid rgba(102,187,106,0.3); }
+    .status-closed { background: rgba(255,255,255,0.05); color: var(--text-dim); border: 1px solid rgba(255,255,255,0.1); }
+    .empty-state { text-align:center; padding: 80px 20px; color: var(--text-dim); font-size:15px; line-height:1.7; }
+    .modal-col { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
   </style>
 </head>
 <body>
