@@ -323,6 +323,7 @@
     </div>
   </div>
   <div id="courts-container"></div>
+  <div id="waitlist-section"></div>
   <button class="add-court-btn" id="add-court-btn" onclick="addCourt()" style="display:none">+ Add an additional court to both blocks</button>
   <button class="copy-btn" onclick="copyWhatsApp()">📋 Copy summary for WhatsApp</button>
 </div>
@@ -521,13 +522,14 @@ function showTracker() {
 function renderCourts() {
   const container = document.getElementById("courts-container");
   container.innerHTML = "";
-  const courtsPerHour = state.courts.filter(c => c.hour === HOURS[0]).length;
+  const actualCourts = state.courts.filter(c => c.hour); // exclude waitlist entry
+  const courtsPerHour = actualCourts.filter(c => c.hour === HOURS[0]).length;
 
   HOURS.forEach((hour, hi) => {
     const block = document.createElement("div");
     block.className = "hour-block";
     block.innerHTML = `<div class="hour-header">${hour}</div>`;
-    state.courts.filter(c => c.hour === hour).forEach(court => {
+    actualCourts.filter(c => c.hour === hour).forEach(court => {
       const globalIdx = state.courts.findIndex(c => c.hour === hour && c.label === court.label);
       block.appendChild(buildCourtCard(court, globalIdx));
     });
@@ -538,19 +540,17 @@ function renderCourts() {
     }
   });
 
-  const anyFullWaitlist = state.courts.some(c => (c.waitlist || []).length >= 4);
+  renderWaitlist();
+  const waitlist = getWaitlist();
   document.getElementById("add-court-btn").style.display =
-    (courtsPerHour < 4 && anyFullWaitlist) ? "block" : "none";
+    (courtsPerHour < 4 && waitlist.length >= 4) ? "block" : "none";
 }
 
 function buildCourtCard(court, idx) {
   const spots = spotsLeft(court);
   const full   = spots === 0;
-  const waitlist = court.waitlist || [];
   const badgeClass = full ? "badge-full" : spots === 1 ? "badge-warn" : "badge-open";
-  const badgeText  = full
-    ? (waitlist.length ? `FULL · ${waitlist.length} waiting` : "FULL")
-    : `${spots} spot${spots !== 1 ? "s" : ""} open`;
+  const badgeText  = full ? "FULL" : `${spots} spot${spots !== 1 ? "s" : ""} open`;
 
   const card = document.createElement("div");
   card.className = "court-card";
@@ -590,18 +590,6 @@ function buildCourtCard(court, idx) {
         </div>`).join("")}
       ${!full ? `<button class="join-btn" onclick="openJoinModal(${idx})">+ Join</button>` : ""}
     </div>
-    ${full ? `
-    <div class="divider" style="margin-top:10px"></div>
-    <div style="font-size:11px; font-weight:bold; color:var(--text-dim); letter-spacing:1.2px; text-transform:uppercase; margin:8px 0 6px">Waitlist</div>
-    <div class="players-grid">
-      ${waitlist.map((p, wi) => `
-        <div class="player-chip" style="border-color:rgba(255,152,0,0.3); background:rgba(255,152,0,0.08)">
-          <span class="player-name" style="color:var(--orange)">${esc(p)}</span>
-          <button class="chip-x" onclick="removeWaitlister(${idx},${wi})">✕</button>
-        </div>`).join("")}
-      <button class="join-btn" style="border-color:rgba(255,152,0,0.4); color:var(--orange)"
-        onclick="openWaitlistModal(${idx})">+ Waitlist</button>
-    </div>` : ""}
   `;
   return card;
 }
@@ -654,17 +642,62 @@ async function deleteCourt(label) {
   showToast(`${label} removed from both blocks`);
 }
 
-function removeWaitlister(idx, wi) {
-  (state.courts[idx].waitlist = state.courts[idx].waitlist || []).splice(wi, 1);
+// ── GLOBAL WAITLIST ───────────────────────────────────────
+function getWaitlist() {
+  const entry = state.courts.find(c => c._type === "waitlist");
+  return entry ? (entry.players || []) : [];
+}
+function setWaitlist(players) {
+  const idx = state.courts.findIndex(c => c._type === "waitlist");
+  if (idx >= 0) state.courts[idx].players = players;
+  else state.courts.push({ _type: "waitlist", players });
+}
+
+function renderWaitlist() {
+  const waitlist = getWaitlist();
+  const section = document.getElementById("waitlist-section");
+  const hint = waitlist.length >= 4
+    ? `<div style="font-size:13px;color:var(--orange);font-style:italic;margin-top:8px">
+         4+ waiting — tap "Add an additional court" below!
+       </div>`
+    : waitlist.length === 0
+      ? `<div style="font-size:13px;color:var(--text-dim);font-style:italic">
+           Courts are full? Add your name here.
+         </div>`
+      : "";
+  section.innerHTML = `
+    <div style="padding:16px 20px 8px">
+      <div style="font-size:11px;font-weight:bold;color:var(--text-dim);letter-spacing:1.5px;
+                  text-transform:uppercase;margin-bottom:10px;padding-bottom:8px;
+                  border-bottom:1px solid var(--border)">
+        ⏳ Waitlist${waitlist.length ? " · " + waitlist.length + " waiting" : ""}
+      </div>
+      <div class="players-grid">
+        ${waitlist.map((p, wi) => `
+          <div class="player-chip" style="border-color:rgba(255,152,0,0.3);background:rgba(255,152,0,0.08)">
+            <span class="player-name" style="color:var(--orange)">${esc(p)}</span>
+            <button class="chip-x" onclick="removeWaitlister(${wi})">✕</button>
+          </div>`).join("")}
+        <button class="join-btn" style="border-color:rgba(255,152,0,0.4);color:var(--orange)"
+          onclick="openWaitlistModal()">+ Join Waitlist</button>
+      </div>
+      ${hint}
+    </div>
+  `;
+}
+
+function removeWaitlister(wi) {
+  const list = getWaitlist();
+  list.splice(wi, 1);
+  setWaitlist(list);
   saveState(); renderCourts();
 }
 
-function openWaitlistModal(idx) {
-  const court = state.courts[idx];
-  const waitlist = court.waitlist || [];
+function openWaitlistModal() {
+  const waitlist = getWaitlist();
   document.getElementById("modal-title").textContent = "Join Waitlist";
   document.getElementById("modal-sub").textContent =
-    `${court.hour} · ${court.label} is full · ${waitlist.length} already waiting`;
+    `${waitlist.length} already waiting — you'll be next in line for a new court`;
   const input = document.getElementById("modal-input");
   input.style.display = "block";
   input.placeholder = "Your name";
@@ -677,8 +710,9 @@ function openWaitlistModal(idx) {
   `;
   input.oninput = () => document.getElementById("modal-save").disabled = !input.value.trim();
   modalCallback = (val) => {
-    if (!state.courts[idx].waitlist) state.courts[idx].waitlist = [];
-    state.courts[idx].waitlist.push(val);
+    const list = getWaitlist();
+    list.push(val);
+    setWaitlist(list);
     saveState(); renderCourts();
   };
   openModal();
@@ -854,10 +888,11 @@ function copyWhatsApp() {
       txt += `  ${c.label}${c.booker ? ` (${c.booker})` : ""} — ${spots} spot${spots !== 1 ? "s" : ""} open\n`;
       if (c.link)    txt += `  🔗 ${c.link}\n`;
       if (c.players.length) txt += `  👥 ${c.players.join(", ")}\n`;
-      if ((c.waitlist || []).length) txt += `  ⏳ Waitlist: ${c.waitlist.join(", ")}\n`;
     });
     txt += "\n";
   });
+  const waitlist = getWaitlist();
+  if (waitlist.length) txt += `⏳ Waitlist: ${waitlist.join(", ")}\n\n`;
   txt += "👉 Join ONE court per hour block to get in the door!";
   navigator.clipboard.writeText(txt).then(() => showToast("✅ Copied for WhatsApp!"));
 }
