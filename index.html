@@ -388,8 +388,8 @@ async function loadList() {
   const emptyEl = document.getElementById("list-empty");
   listEl.innerHTML = "";
 
-  const hidden = getHiddenIds();
-  const visible = (data || []).filter(s => !hidden.includes(s.id));
+  // Filter out soft-deleted records (courts marked with _deleted: true)
+  const visible = (data || []).filter(s => !s.courts?.[0]?._deleted);
 
   if (visible.length === 0) {
     emptyEl.style.display = "block";
@@ -402,9 +402,10 @@ async function loadList() {
 function buildScrambleCard(s) {
   const d = new Date(s.date + "T12:00:00");
   const dateStr = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
-  const courtsPerHour = s.courts.filter(c => c.hour === HOURS[0]).length;
-  const totalPlayers  = s.courts.reduce((sum, c) => sum + c.players.length, 0);
-  const bookersFilled = s.courts.filter(c => c.booker).length;
+  const realCourts    = s.courts.filter(c => c.hour);
+  const courtsPerHour = realCourts.filter(c => c.hour === HOURS[0]).length;
+  const totalPlayers  = realCourts.reduce((sum, c) => sum + (c.players || []).length, 0);
+  const bookersFilled = realCourts.filter(c => c.booker).length;
 
   const el = document.createElement("div");
   el.className = "scramble-card";
@@ -767,28 +768,19 @@ function confirmDelete() {
 
 async function deleteScramble() {
   const id = state.id;
-  const { error } = await db.from("scrambles").delete().eq("id", id);
+  // Soft-delete: mark the record in Supabase so it's hidden for everyone.
+  // We use update (not delete) because Supabase RLS may block hard deletes
+  // for the publishable anon key, but updates already work fine.
+  const { error } = await db.from("scrambles")
+    .update({ courts: [{ _deleted: true }], active: false })
+    .eq("id", id);
   if (error) { showToast("❌ Delete failed"); console.error(error); closeModal(); return; }
-
-  // Supabase RLS can silently block deletes — verify the record is actually gone
-  const { data: check } = await db.from("scrambles").select("id").eq("id", id).maybeSingle();
-  if (check) {
-    // Hard delete blocked by RLS — hide it locally so it disappears from the list
-    const hidden = getHiddenIds();
-    hidden.push(id);
-    localStorage.setItem("hidden_scrambles", JSON.stringify(hidden));
-  }
 
   if (realtimeChannel) { db.removeChannel(realtimeChannel); realtimeChannel = null; }
   state = null;
   closeModal();
   showToast("🗑️ Scramble deleted");
   loadList();
-}
-
-function getHiddenIds() {
-  try { return JSON.parse(localStorage.getItem("hidden_scrambles") || "[]"); }
-  catch { return []; }
 }
 
 // ── MODAL HELPERS ─────────────────────────────────────────
