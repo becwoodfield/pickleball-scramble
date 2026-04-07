@@ -654,8 +654,11 @@ function setWaitlist(players) {
 }
 
 function renderWaitlist() {
-  const waitlist = getWaitlist();
   const section = document.getElementById("waitlist-section");
+  const actualCourts = state.courts.filter(c => c.hour);
+  const allFull = actualCourts.length > 0 && actualCourts.every(c => spotsLeft(c) === 0);
+  if (!allFull) { section.innerHTML = ""; return; }
+  const waitlist = getWaitlist();
   const hint = waitlist.length >= 4
     ? `<div style="font-size:13px;color:var(--orange);font-style:italic;margin-top:8px">
          4+ waiting — tap "Add an additional court" below!
