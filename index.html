@@ -541,9 +541,10 @@ function renderCourts() {
   });
 
   renderWaitlist();
+  const allFull = actualCourts.length > 0 && actualCourts.every(c => spotsLeft(c) === 0);
   const waitlist = getWaitlist();
   document.getElementById("add-court-btn").style.display =
-    (courtsPerHour < 4 && waitlist.length >= 4) ? "block" : "none";
+    (courtsPerHour < 4 && allFull && waitlist.length >= 4) ? "block" : "none";
 }
 
 function buildCourtCard(court, idx) {
