@@ -6,6 +6,26 @@
   <title>🏓 Pickleball Scramble</title>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
+    /* NEW: scramble list cards */
+    .scramble-card {
+      margin: 0 0 10px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .scramble-card:active { border-color: var(--green); }
+    .scramble-card-date { font-size: 17px; font-weight: bold; color: var(--green-pale); }
+    .scramble-card-meta { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+    .status-open  { background: rgba(102,187,106,0.15); color: #66bb6a; border: 1px solid rgba(102,187,106,0.3); }
+    .status-closed{ background: rgba(255,255,255,0.05); color: var(--text-dim); border: 1px solid rgba(255,255,255,0.1); }
+    .empty-state { text-align:center; padding: 80px 20px; color: var(--text-dim); font-size:15px; line-height:1.7; }
+
+    /* NEW: vertical modal stack for admin options */
+    .modal-col { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+  </style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 
     :root {
@@ -240,12 +260,35 @@
   <div class="loading-text">Loading scramble...</div>
 </div>
 
+<!-- LIST -->
+<div id="list-screen" style="display:none">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="title">🏓 Scramble Tracker</div>
+    </div>
+    <div class="topbar-right">
+      <button class="icon-btn" onclick="goToSetup()" style="font-size:24px; font-weight:bold" title="New Scramble">+</button>
+    </div>
+  </div>
+  <div style="padding: 12px 20px 40px">
+    <div id="scramble-list"></div>
+    <div id="list-empty" class="empty-state" style="display:none">
+      <div style="font-size:44px; margin-bottom:16px">🏓</div>
+      No scrambles yet.<br>Tap <strong>+</strong> to create your first one.
+    </div>
+  </div>
+</div>
+
 <!-- SETUP -->
 <div id="setup-screen" style="display:none">
+  <div class="topbar" style="border:none; padding-bottom:0">
+    <button class="icon-btn" onclick="goToList()" style="font-size:15px; color:var(--text-dim)">← Back</button>
+    <div></div>
+  </div>
   <div class="hero">
     <div class="hero-emoji">🏓</div>
-    <div class="hero-title">Scramble Tracker</div>
-    <div class="hero-sub">Court reservation organizer</div>
+    <div class="hero-title">New Scramble</div>
+    <div class="hero-sub">Set up a new court tracker</div>
   </div>
 
   <div class="section">
@@ -269,13 +312,16 @@
 <!-- TRACKER -->
 <div id="tracker-screen" style="display:none">
   <div class="topbar">
-    <div class="topbar-left">
-      <div class="title">🏓 Scramble</div>
-      <div class="subtitle" id="tracker-date"></div>
+    <div class="topbar-left" style="display:flex; align-items:center; gap:4px">
+      <button class="icon-btn" onclick="goToList()" style="font-size:15px; padding:4px 10px 4px 0">←</button>
+      <div>
+        <div class="title">🏓 Scramble</div>
+        <div class="subtitle" id="tracker-date"></div>
+      </div>
     </div>
     <div class="topbar-right">
       <span style="font-size:12px;color:var(--text-dim)"><span class="live-dot"></span>Live</span>
-      <button class="icon-btn" onclick="openResetModal()">⋯</button>
+      <button class="icon-btn" onclick="openOptionsModal()">⋯</button>
     </div>
   </div>
   <div id="courts-container"></div>
@@ -307,30 +353,97 @@ const SUPABASE_KEY = "sb_publishable_i-GqrXN3qZTaU4zjOtYJCQ_kwJ4v2Ns";
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// ── Change this PIN to restrict admin access ──────────────
+const ADMIN_PIN = "1234";
+
 const HOURS = ["5:00–6:00 PM", "6:00–7:00 PM"];
 const MAX_PLAYERS = 6;
-let state = null; // { id, date, courts: [{hour, label, booker, link, players:[]}] }
+let state = null;
 let modalCallback = null;
+let pendingAdminAction = null;
 let realtimeChannel = null;
+let adminUnlocked = false;
 
 // ── INIT ────────────────────────────────────────────────
 async function init() {
-  // Check for existing active scramble
-  const { data, error } = await db
+  adminUnlocked = sessionStorage.getItem("admin_unlocked") === "true";
+  await loadList();
+}
+
+// ── LIST ─────────────────────────────────────────────────
+async function loadList() {
+  showScreen("list-screen");
+  const { data } = await db
     .from("scrambles")
     .select("*")
-    .eq("active", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .order("date", { ascending: false })
+    .order("created_at", { ascending: false });
 
-  if (data) {
-    state = data;
-    showTracker();
-    subscribeRealtime();
-  } else {
-    showSetup();
+  const listEl  = document.getElementById("scramble-list");
+  const emptyEl = document.getElementById("list-empty");
+  listEl.innerHTML = "";
+
+  if (!data || data.length === 0) {
+    emptyEl.style.display = "block";
+    return;
   }
+  emptyEl.style.display = "none";
+  data.forEach(s => listEl.appendChild(buildScrambleCard(s)));
+}
+
+function buildScrambleCard(s) {
+  const d = new Date(s.date + "T12:00:00");
+  const dateStr = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  const courtsPerHour = s.courts.filter(c => c.hour === HOURS[0]).length;
+  const totalPlayers  = s.courts.reduce((sum, c) => sum + c.players.length, 0);
+  const bookersFilled = s.courts.filter(c => c.booker).length;
+
+  const el = document.createElement("div");
+  el.className = "scramble-card";
+  el.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:flex-start">
+      <div class="scramble-card-date">${dateStr}</div>
+      <span class="badge ${s.active ? "status-open" : "status-closed"}">
+        ${s.active ? '<span class="live-dot" style="margin-right:4px"></span>OPEN' : "CLOSED"}
+      </span>
+    </div>
+    <div class="scramble-card-meta" style="margin-top:6px">
+      ${courtsPerHour} court${courtsPerHour !== 1 ? "s" : ""} &nbsp;·&nbsp;
+      ${totalPlayers} player${totalPlayers !== 1 ? "s" : ""} &nbsp;·&nbsp;
+      ${bookersFilled}/${s.courts.length} booked
+    </div>
+  `;
+  el.onclick = () => openScramble(s);
+  return el;
+}
+
+function openScramble(s) {
+  state = s;
+  showTracker();
+  subscribeRealtime();
+}
+
+// ── NAVIGATION ───────────────────────────────────────────
+function showScreen(id) {
+  ["loading-screen","list-screen","setup-screen","tracker-screen"]
+    .forEach(s => document.getElementById(s).style.display = s === id ? "block" : "none");
+}
+
+function goToList() {
+  if (realtimeChannel) { db.removeChannel(realtimeChannel); realtimeChannel = null; }
+  state = null;
+  closeModal();
+  loadList();
+}
+
+function goToSetup() {
+  showScreen("setup-screen");
+  // reset setup form
+  document.getElementById("setup-date").value = "";
+  numCourts = 3;
+  document.querySelectorAll(".pill").forEach(p => p.classList.remove("active"));
+  document.querySelector('.pill[data-n="3"]').classList.add("active");
+  document.getElementById("setup-hint").textContent = "6 people need to book — 3 per hour block";
 }
 
 // ── SETUP ────────────────────────────────────────────────
@@ -371,16 +484,13 @@ async function createScramble() {
 function subscribeRealtime() {
   if (realtimeChannel) db.removeChannel(realtimeChannel);
   realtimeChannel = db
-    .channel("scramble-changes")
+    .channel("scramble-" + state.id)
     .on("postgres_changes", { event: "UPDATE", schema: "public", table: "scrambles", filter: `id=eq.${state.id}` },
-      (payload) => {
-        state = payload.new;
-        renderCourts();
-      })
+      (payload) => { state = payload.new; renderCourts(); })
     .subscribe();
 }
 
-// ── SAVE TO SUPABASE ──────────────────────────────────────
+// ── SAVE ─────────────────────────────────────────────────
 async function saveState() {
   const { error } = await db
     .from("scrambles")
@@ -389,61 +499,44 @@ async function saveState() {
   if (error) { showToast("❌ Save failed"); console.error(error); }
 }
 
-// ── RENDER ───────────────────────────────────────────────
-function showSetup() {
-  document.getElementById("loading-screen").style.display = "none";
-  document.getElementById("setup-screen").style.display = "block";
-  document.getElementById("tracker-screen").style.display = "none";
-}
-
+// ── TRACKER RENDER ───────────────────────────────────────
 function showTracker() {
-  document.getElementById("loading-screen").style.display = "none";
-  document.getElementById("setup-screen").style.display = "none";
-  document.getElementById("tracker-screen").style.display = "block";
-
+  showScreen("tracker-screen");
   const d = new Date(state.date + "T12:00:00");
-  document.getElementById("tracker-date").textContent =
-    d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-
+  const dateStr = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  document.getElementById("tracker-date").innerHTML =
+    dateStr + (state.active ? "" : ' <span style="color:var(--text-dim);font-size:11px">· CLOSED</span>');
   renderCourts();
 }
 
 function renderCourts() {
   const container = document.getElementById("courts-container");
   container.innerHTML = "";
-
   const courtsPerHour = state.courts.filter(c => c.hour === HOURS[0]).length;
 
   HOURS.forEach((hour, hi) => {
     const block = document.createElement("div");
     block.className = "hour-block";
     block.innerHTML = `<div class="hour-header">${hour}</div>`;
-
-    const hourCourts = state.courts.filter(c => c.hour === hour);
-    hourCourts.forEach((court, ci) => {
+    state.courts.filter(c => c.hour === hour).forEach(court => {
       const globalIdx = state.courts.findIndex(c => c.hour === hour && c.label === court.label);
       block.appendChild(buildCourtCard(court, globalIdx));
     });
-
     container.appendChild(block);
     if (hi < HOURS.length - 1) {
-      const sep = document.createElement("div");
-      sep.className = "sep";
+      const sep = document.createElement("div"); sep.className = "sep";
       container.appendChild(sep);
     }
   });
 
-  // Show add court btn only if < 4 courts per hour
-  const addBtn = document.getElementById("add-court-btn");
-  addBtn.style.display = courtsPerHour < 4 ? "block" : "none";
+  document.getElementById("add-court-btn").style.display = courtsPerHour < 4 ? "block" : "none";
 }
 
 function buildCourtCard(court, idx) {
   const spots = MAX_PLAYERS - court.players.length;
   const full = spots === 0;
   const badgeClass = full ? "badge-full" : spots <= 2 ? "badge-warn" : "badge-open";
-  const badgeText = full ? "FULL" : `${spots} spot${spots !== 1 ? "s" : ""} left`;
-
+  const badgeText  = full ? "FULL" : `${spots} spot${spots !== 1 ? "s" : ""} left`;
   const card = document.createElement("div");
   card.className = "court-card";
   card.innerHTML = `
@@ -451,7 +544,6 @@ function buildCourtCard(court, idx) {
       <span class="court-label">${court.label}</span>
       <span class="badge ${badgeClass}">${badgeText}</span>
     </div>
-
     <div class="info-row">
       <span class="info-icon">👤</span>
       ${court.booker
@@ -459,10 +551,8 @@ function buildCourtCard(court, idx) {
              <span class="info-val">${esc(court.booker)}</span>
              <button class="x-btn" onclick="clearField(${idx},'booker')">✕</button>
            </div>`
-        : `<button class="ghost-btn" onclick="openFieldModal(${idx},'booker','Who\\'s booking?','Name')">+ Add booker</button>`
-      }
+        : `<button class="ghost-btn" onclick="openFieldModal(${idx},'booker','Who\\'s booking?','Name')">+ Add booker</button>`}
     </div>
-
     <div class="info-row">
       <span class="info-icon">🔗</span>
       ${court.link
@@ -470,12 +560,9 @@ function buildCourtCard(court, idx) {
              <a href="${esc(court.link)}" target="_blank" class="link-val">Open reservation ↗</a>
              <button class="x-btn" onclick="clearField(${idx},'link')">✕</button>
            </div>`
-        : `<button class="ghost-btn" onclick="openFieldModal(${idx},'link','Paste reservation link','https://...')">+ Paste link</button>`
-      }
+        : `<button class="ghost-btn" onclick="openFieldModal(${idx},'link','Paste reservation link','https://...')">+ Paste link</button>`}
     </div>
-
     <div class="divider"></div>
-
     <div class="players-grid" id="players-${idx}">
       ${court.players.map((p, pi) => `
         <div class="player-chip">
@@ -495,16 +582,12 @@ function esc(str) {
 // ── ACTIONS ───────────────────────────────────────────────
 function clearField(idx, field) {
   state.courts[idx][field] = "";
-  saveState();
-  renderCourts();
+  saveState(); renderCourts();
 }
-
 function removePlayer(idx, pi) {
   state.courts[idx].players.splice(pi, 1);
-  saveState();
-  renderCourts();
+  saveState(); renderCourts();
 }
-
 async function addCourt() {
   const newCourts = [...state.courts];
   HOURS.forEach(hour => {
@@ -514,29 +597,116 @@ async function addCourt() {
   state.courts = newCourts;
   await saveState();
   renderCourts();
-  showToast("Court 4 added to both blocks!");
+  const count = state.courts.filter(c => c.hour === HOURS[0]).length;
+  showToast(`Court ${count} added to both blocks!`);
+}
+
+// ── ADMIN AUTH ────────────────────────────────────────────
+function requireAdmin(action) {
+  if (adminUnlocked) { action(); return; }
+  pendingAdminAction = action;
+  openPinModal();
+}
+
+function openPinModal() {
+  document.getElementById("modal-title").textContent = "Admin Access";
+  document.getElementById("modal-sub").textContent = "Enter PIN to continue.";
+  const input = document.getElementById("modal-input");
+  input.type = "password";
+  input.style.display = "block";
+  input.placeholder = "PIN";
+  input.value = "";
+  input.dispatchEvent(new Event("input"));
+  document.getElementById("modal-btns").className = "modal-row";
+  document.getElementById("modal-btns").innerHTML = `
+    <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+    <button class="save-btn" id="modal-save" onclick="submitPin()" disabled>Unlock</button>
+  `;
+  input.oninput = () => document.getElementById("modal-save").disabled = !input.value.trim();
+  modalCallback = null;
+  openModal();
+  setTimeout(() => input.focus(), 300);
+}
+
+function submitPin() {
+  const val = document.getElementById("modal-input").value;
+  if (val === ADMIN_PIN) {
+    adminUnlocked = true;
+    sessionStorage.setItem("admin_unlocked", "true");
+    closeModal();
+    if (pendingAdminAction) { const fn = pendingAdminAction; pendingAdminAction = null; fn(); }
+  } else {
+    showToast("❌ Incorrect PIN");
+    document.getElementById("modal-input").value = "";
+  }
+}
+
+// ── OPTIONS MODAL (admin-gated) ───────────────────────────
+function openOptionsModal() {
+  requireAdmin(showAdminOptions);
+}
+
+function showAdminOptions() {
+  document.getElementById("modal-title").textContent = "Admin Options";
+  document.getElementById("modal-sub").textContent = "";
+  document.getElementById("modal-input").style.display = "none";
+  document.getElementById("modal-btns").className = "modal-col";
+  document.getElementById("modal-btns").innerHTML = `
+    <button class="save-btn" onclick="toggleScrambleStatus()">
+      ${state.active ? "Close Scramble" : "Reopen Scramble"}
+    </button>
+    <button class="danger-btn" onclick="confirmDelete()">Delete Scramble</button>
+    <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+  `;
+  modalCallback = null;
+  openModal();
+}
+
+async function toggleScrambleStatus() {
+  const newActive = !state.active;
+  await db.from("scrambles").update({ active: newActive }).eq("id", state.id);
+  state.active = newActive;
+  closeModal();
+  showTracker();
+  showToast(newActive ? "✅ Scramble reopened" : "✅ Scramble closed");
+}
+
+function confirmDelete() {
+  document.getElementById("modal-title").textContent = "Delete Scramble?";
+  document.getElementById("modal-sub").textContent = "This cannot be undone.";
+  document.getElementById("modal-btns").className = "modal-row";
+  document.getElementById("modal-btns").innerHTML = `
+    <button class="cancel-btn" onclick="closeModal()">Cancel</button>
+    <button class="danger-btn" onclick="deleteScramble()">Delete Forever</button>
+  `;
+  openModal();
+}
+
+async function deleteScramble() {
+  await db.from("scrambles").delete().eq("id", state.id);
+  if (realtimeChannel) { db.removeChannel(realtimeChannel); realtimeChannel = null; }
+  state = null;
+  closeModal();
+  showToast("🗑️ Scramble deleted");
+  loadList();
 }
 
 // ── MODAL HELPERS ─────────────────────────────────────────
 function openFieldModal(idx, field, title, placeholder) {
   document.getElementById("modal-title").textContent = title;
-  document.getElementById("modal-sub").textContent =
-    `${state.courts[idx].hour} · ${state.courts[idx].label}`;
+  document.getElementById("modal-sub").textContent = `${state.courts[idx].hour} · ${state.courts[idx].label}`;
   const input = document.getElementById("modal-input");
   input.style.display = "block";
   input.placeholder = placeholder;
   input.value = state.courts[idx][field] || "";
   input.dispatchEvent(new Event("input"));
+  document.getElementById("modal-btns").className = "modal-row";
   document.getElementById("modal-btns").innerHTML = `
     <button class="cancel-btn" onclick="closeModal()">Cancel</button>
-    <button class="save-btn" id="modal-save" onclick="modalSave()" ${input.value.trim()?'':'disabled'}>Save</button>
+    <button class="save-btn" id="modal-save" onclick="modalSave()" ${input.value.trim() ? "" : "disabled"}>Save</button>
   `;
   input.oninput = () => document.getElementById("modal-save").disabled = !input.value.trim();
-  modalCallback = (val) => {
-    state.courts[idx][field] = val;
-    saveState();
-    renderCourts();
-  };
+  modalCallback = (val) => { state.courts[idx][field] = val; saveState(); renderCourts(); };
   openModal();
   setTimeout(() => input.focus(), 300);
 }
@@ -545,13 +715,13 @@ function openJoinModal(idx) {
   const court = state.courts[idx];
   const spots = MAX_PLAYERS - court.players.length;
   document.getElementById("modal-title").textContent = "Add your name";
-  document.getElementById("modal-sub").textContent =
-    `${court.hour} · ${court.label} · ${spots} spot${spots!==1?"s":""} left`;
+  document.getElementById("modal-sub").textContent = `${court.hour} · ${court.label} · ${spots} spot${spots !== 1 ? "s" : ""} left`;
   const input = document.getElementById("modal-input");
   input.style.display = "block";
   input.placeholder = "Your name";
   input.value = "";
   input.dispatchEvent(new Event("input"));
+  document.getElementById("modal-btns").className = "modal-row";
   document.getElementById("modal-btns").innerHTML = `
     <button class="cancel-btn" onclick="closeModal()">Cancel</button>
     <button class="save-btn" id="modal-save" onclick="modalSave()" disabled>Join</button>
@@ -560,39 +730,19 @@ function openJoinModal(idx) {
   modalCallback = (val) => {
     if (state.courts[idx].players.length >= MAX_PLAYERS) return;
     state.courts[idx].players.push(val);
-    saveState();
-    renderCourts();
+    saveState(); renderCourts();
   };
   openModal();
   setTimeout(() => input.focus(), 300);
 }
 
-function openResetModal() {
-  document.getElementById("modal-title").textContent = "Options";
-  document.getElementById("modal-sub").textContent = "Start a new scramble or reset current data.";
-  document.getElementById("modal-input").style.display = "none";
-  document.getElementById("modal-btns").innerHTML = `
-    <button class="cancel-btn" onclick="closeModal()">Cancel</button>
-    <button class="danger-btn" onclick="resetScramble()">New Scramble</button>
-  `;
-  modalCallback = null;
-  openModal();
-}
-
-async function resetScramble() {
-  await db.from("scrambles").update({ active: false }).eq("id", state.id);
-  if (realtimeChannel) db.removeChannel(realtimeChannel);
-  state = null;
-  closeModal();
-  showSetup();
-}
-
-function openModal() {
-  document.getElementById("modal-overlay").classList.add("open");
-}
+function openModal()  { document.getElementById("modal-overlay").classList.add("open"); }
 function closeModal() {
   document.getElementById("modal-overlay").classList.remove("open");
+  const input = document.getElementById("modal-input");
+  input.type = "text";
   modalCallback = null;
+  pendingAdminAction = null;
 }
 function modalSave() {
   const val = document.getElementById("modal-input").value.trim();
@@ -608,8 +758,8 @@ function copyWhatsApp() {
     txt += `⏰ ${hour}\n`;
     state.courts.filter(c => c.hour === hour).forEach(c => {
       const spots = MAX_PLAYERS - c.players.length;
-      txt += `  ${c.label}${c.booker ? ` (${c.booker})` : ""} — ${spots} spot${spots!==1?"s":""} left\n`;
-      if (c.link) txt += `  🔗 ${c.link}\n`;
+      txt += `  ${c.label}${c.booker ? ` (${c.booker})` : ""} — ${spots} spot${spots !== 1 ? "s" : ""} left\n`;
+      if (c.link)    txt += `  🔗 ${c.link}\n`;
       if (c.players.length) txt += `  👥 ${c.players.join(", ")}\n`;
     });
     txt += "\n";
